@@ -61,7 +61,3 @@ The application will be accessible by default on **localhost:3000** (or whatever
 - `data/`: Contains the SQLite database file (ignored in source control).
 - `public/`: Frontend static assets (HTML, CSS, JS).
 - `exports/` & `media/`: Processed outputs and graphical resources.
-
-## License
-
-This project is licensed under the MIT License.
