@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { getDateInTimeZone, DEFAULT_TIME_ZONE } = require('../dateTime');
+const { buildParticipantListFilter } = require('../services/participantListFilter');
 
 function boundedInteger(value, fallback, maximum) {
   const parsed = Number.parseInt(value, 10);
@@ -55,13 +56,7 @@ router.get('/', async (req, res) => {
     const limit = boundedInteger(req.query.limit, 50, 1000) || 50;
     const offset = boundedInteger(req.query.offset, 0, 1000000);
     const archived = req.query.archived === 'true';
-    const params = [archived, `%${q}%`, `%${q}%`, `%${q}%`];
-    let where = `archived_at IS ${archived ? 'NOT ' : ''}NULL
-      AND (COALESCE(name, '') ILIKE ? OR COALESCE(email, '') ILIKE ? OR badge_id ILIKE ?)`;
-    if (type) {
-      where += ' AND type = ?';
-      params.push(type);
-    }
+    const { where, params } = buildParticipantListFilter(q, type, archived);
 
     const total = await db.query(`SELECT COUNT(*) AS count FROM participants WHERE ${where}`, params);
     const rows = await db.query(

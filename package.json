@@ -7,7 +7,7 @@
     "start": "node src/server.js",
     "setup": "node src/setup-db.js",
     "migrate:sqlite": "node src/migrate-sqlite-to-postgres.js",
-    "test": "node --test test/date-time-auth.test.js test/participant-spreadsheet.test.js"
+    "test": "node --test test/date-time-auth.test.js test/participant-spreadsheet.test.js test/participant-list-filter.test.js"
   },
   "dependencies": {
     "dotenv": "^16.6.1",
