@@ -17,6 +17,7 @@
 
   .header { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 12px 16px; display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 100; }
   .header-title { font-weight: 800; font-size: 16px; color: var(--accent); margin-right: auto; }
+  .logout-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 7px 9px; border-radius: 8px; cursor: pointer; }
   select, .header input { background: var(--bg3); border: 1px solid var(--border); color: var(--text); padding: 7px 10px; border-radius: 8px; font-size: 13px; outline: none; transition: border-color .15s; }
   select:focus, .header input:focus { border-color: var(--accent); }
   #operatorId { width: 100px; }
@@ -94,6 +95,7 @@
   </select>
   <input type="text" id="operatorId" placeholder="Gate/Operator" value="Main">
   <div id="wsDot"></div>
+  <button class="logout-btn" type="button" onclick="logout()">Sign out</button>
 </div>
 
 <div class="main">
@@ -139,6 +141,43 @@ const readerDiv = document.getElementById('reader');
 const stationSelect = document.getElementById('stationType');
 const overlay = document.getElementById('overlay');
 const ovCard = document.getElementById('ovCard');
+let eventTimeZone = 'Asia/Kolkata';
+
+function formatEventTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat(undefined, {
+    timeZone: eventTimeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).format(date);
+}
+
+function escapeHTML(value) {
+  return String(value).replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[char]);
+}
+
+const originalFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const response = await originalFetch(...args);
+  if (response.status === 401) {
+    location.replace(`/login.html?next=${encodeURIComponent(location.pathname + location.search)}`);
+  }
+  return response;
+};
+
+async function logout() {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  location.replace('/login.html');
+}
+
+fetch('/api/settings')
+  .then(response => response.json())
+  .then(settings => { eventTimeZone = settings.event_timezone || eventTimeZone; })
+  .catch(error => console.error('Could not load event time zone:', error));
 
 let html5QrCode;
 let isScanning = false;
@@ -235,6 +274,7 @@ async function doScan(uuid) {
 
 const RESULTS = {
   allow: { icon: '✅', label: 'ALLOW', bg: 'bg-allow' },
+  caution: { icon: '⚠️', label: 'CAUTION', bg: 'bg-warn' },
   warn:  { icon: '⚠️', label: 'RE-ENTRY', bg: 'bg-warn' },
   deny:  { icon: '❌', label: 'DENIED', bg: 'bg-deny' }
 };
@@ -275,9 +315,9 @@ function updateRecent(d) {
   const div = document.createElement('div');
   div.className = 'item';
   div.innerHTML = `
-    <div class="item-dot ${d.result}" style="color: ${d.result === 'allow' ? '#22c55e' : d.result === 'warn' ? '#f59e0b' : '#ef4444'}"></div>
-    <div class="item-name">${p.name} <span class="item-type">${p.type || ''}</span></div>
-    <div class="item-time">${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'})}</div>
+    <div class="item-dot ${escapeHTML(d.result)}" style="color: ${d.result === 'allow' ? '#22c55e' : d.result === 'caution' || d.result === 'warn' ? '#f59e0b' : '#ef4444'}"></div>
+    <div class="item-name">${escapeHTML(p.name || 'Unknown')} <span class="item-type">${escapeHTML(p.type || '')}</span></div>
+    <div class="item-time">${formatEventTime(d.scanned_at || new Date())}</div>
   `;
   list.prepend(div);
   if (list.children.length > 10) list.lastChild.remove();
@@ -285,9 +325,15 @@ function updateRecent(d) {
 
 // WebSocket 
 const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-const ws = new WebSocket(`${proto}://${location.host}`);
-ws.onopen  = () => document.getElementById('wsDot').style.background = '#22c55e';
-ws.onclose = () => document.getElementById('wsDot').style.background = '#ef4444';
+function connectWS() {
+  const ws = new WebSocket(`${proto}://${location.host}`);
+  ws.onopen = () => document.getElementById('wsDot').style.background = '#22c55e';
+  ws.onclose = () => {
+    document.getElementById('wsDot').style.background = '#ef4444';
+    fetch('/api/settings').then(() => setTimeout(connectWS, 3000));
+  };
+}
+connectWS();
 
 // Autofocus loop - only focus if not in another interactive field
 setInterval(() => {

@@ -5,19 +5,30 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "setup": "node src/setup-db.js"
+    "setup": "node src/setup-db.js",
+    "migrate:sqlite": "node src/migrate-sqlite-to-postgres.js",
+    "test": "node --test test/date-time-auth.test.js test/participant-spreadsheet.test.js"
   },
   "dependencies": {
-    "archiver": "^6.0.1",
-    "node-sqlite3-wasm": "^0.8.55",
-    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "exceljs": "^4.4.0",
     "express": "^4.18.3",
     "express-fileupload": "^1.4.3",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^8.3.0",
     "morgan": "^1.10.0",
+    "node-sqlite3-wasm": "^0.8.55",
     "pdf-lib": "^1.17.1",
-    "puppeteer": "^24.4.0",
+    "pg": "^8.23.1",
+    "puppeteer": "^25.18.0",
     "qrcode": "^1.5.3",
-    "ws": "^8.16.0",
-    "xlsx": "^0.18.5"
+    "ws": "^8.16.0"
+  },
+  "overrides": {
+    "qs": "6.16.2",
+    "uuid": "11.1.1"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

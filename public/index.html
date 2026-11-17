@@ -157,6 +157,7 @@
   <button type="button" class="nav-btn" onclick="showPage('logs')">Logs</button>
   <button type="button" class="nav-btn" onclick="showPage('settings')">Settings</button>
   <div class="ws-dot" id="wsDot" title="WebSocket status"></div>
+  <button type="button" class="nav-btn" onclick="logout()">Sign out</button>
 </nav>
 
 <main class="main">
@@ -190,9 +191,9 @@
       <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
         <div class="icon">📄</div>
         <p><strong>Click to browse</strong> or drag & drop your file here</p>
-        <p style="margin-top:6px">Supports .csv · .xlsx · .xls — <a href="/api/import/template" style="color:var(--accent)">download template</a></p>
+        <p style="margin-top:6px">Supports .csv · .xlsx — <a href="/api/import/template" style="color:var(--accent)">download template</a></p>
       </div>
-      <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" style="display:none" onchange="importFile(this.files[0])">
+      <input type="file" id="fileInput" accept=".csv,.xlsx" style="display:none" onchange="importFile(this.files[0])">
       <div id="importProgress" style="display:none;margin-top:12px">
         <div class="progress-bar-wrap"><div class="progress-bar" id="importBar" style="width:60%"></div></div>
         <p id="importMsg" style="color:var(--muted);font-size:12px;margin-top:4px">Processing...</p>
@@ -242,7 +243,7 @@
         </div>
         <div style="margin-left:auto;display:flex;gap:8px;align-items:flex-end">
           <button type="button" class="btn btn-ghost btn-sm" onclick="exportCSV('participants')">⬇ Export CSV</button>
-          <button type="button" class="btn btn-danger btn-sm" onclick="wipeAll(event)">🗑 Wipe all</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="archiveToggle" onclick="toggleArchivedParticipants()">Show archived</button>
         </div>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
@@ -417,6 +418,11 @@
         <label>Event date</label>
         <input type="date" id="sEventDate">
       </div>
+      <div class="form-group" style="margin-bottom:16px">
+        <label>Event time zone (IANA)</label>
+        <input type="text" id="sEventTimezone" placeholder="Asia/Kolkata" autocomplete="off">
+        <small style="color:var(--muted)">Used for scan-day rules and displayed timestamps.</small>
+      </div>
       <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
     </div>
   </div>
@@ -482,6 +488,27 @@
 
 <script>
 // ── WebSocket live updates ──────────────────────────────
+let eventTimeZone = 'Asia/Kolkata';
+function formatEventDateTime(value, options = {}) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat(undefined, { timeZone: eventTimeZone, ...options }).format(date);
+}
+
+const originalFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const response = await originalFetch(...args);
+  if (response.status === 401) {
+    location.replace(`/login.html?next=${encodeURIComponent(location.pathname + location.search)}`);
+  }
+  return response;
+};
+
+async function logout() {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  location.replace('/login.html');
+}
+
 let ws;
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -589,14 +616,14 @@ async function loadStats() {
 function addLiveFeedItem(msg) {
   const feed = document.getElementById('liveFeed');
   const p    = msg.participant || {};
-  const time = new Date().toLocaleTimeString();
+  const time = formatEventDateTime(msg.scanned_at || new Date(), { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const div  = document.createElement('div');
   div.className = 'log-item';
   div.innerHTML = `
     <div class="log-dot ${msg.result}"></div>
     <div>
-      <div><strong>${p.name || '?'}</strong> · <span style="color:var(--muted)">${msg.station_type}</span></div>
-      <div class="log-meta">${msg.message || ''} · ${msg.operator_id || ''} · ${time}</div>
+      <div><strong>${escapeHTML(p.name || '?')}</strong> · <span style="color:var(--muted)">${escapeHTML(msg.station_type || '')}</span></div>
+      <div class="log-meta">${escapeHTML(msg.message || '')} · ${escapeHTML(msg.operator_id || '')} · ${time}</div>
     </div>`;
   feed.prepend(div);
   while (feed.children.length > 50) feed.lastChild.remove();
@@ -636,12 +663,13 @@ async function importFile(file) {
 // ── Participants ────────────────────────────────────────
 let pOffset = 0;
 let pTotal = 0;
+let archivedParticipants = false;
 async function loadParticipants() {
   try {
     const q     = document.getElementById('pSearch').value;
     const type  = document.getElementById('pType').value;
     const limit = document.getElementById('pLimit') ? document.getElementById('pLimit').value : 500;
-    const r     = await fetch(`/api/participants?q=${encodeURIComponent(q)}&type=${type}&limit=${limit}&offset=${pOffset}`).then(r=>r.json());
+    const r     = await fetch(`/api/participants?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}&limit=${limit}&offset=${pOffset}&archived=${archivedParticipants}`).then(r=>r.json());
     const tb    = document.getElementById('pTable');
     if (!tb) return;
     
@@ -651,23 +679,22 @@ async function loadParticipants() {
       tb.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:24px">No participants found.</td></tr>';
     } else {
       tb.innerHTML = r.rows.map(p => {
-        const safeName = (p.name || '').replace(/'/g, "\\'");
-        // properly escape for JSON.stringify in HTML attribute
         const jsonStr = JSON.stringify(p).replace(/'/g, "&#39;").replace(/"/g, "&quot;");
+        const action = archivedParticipants
+          ? `<button type="button" class="btn btn-ghost btn-sm" onclick="restoreParticipant(event, ${p.id}, this.dataset.name)" data-name="${escapeHTML(p.name || '')}">Restore</button>`
+          : `<button type="button" class="btn btn-ghost btn-sm" onclick='openEditModal(${jsonStr})' style="margin-right:2px;">✏</button>
+             <button type="button" class="btn btn-ghost btn-sm" onclick="archiveParticipant(event, ${p.id}, this.dataset.name)" data-name="${escapeHTML(p.name || '')}">🗑</button>`;
         return `
           <tr>
             <td>${p.id}</td>
-            <td>${p.name || ''}</td>
-            <td style="color:var(--muted)">${p.company||'–'}</td>
-            <td style="color:var(--muted)">${p.tnmc_no||'–'}</td>
-            <td style="color:var(--muted)">${p.email||'–'}</td>
-            <td style="color:var(--muted)">${p.phone||'–'}</td>
-            <td style="font-family:monospace;font-size:12px">${p.badge_id || ''}</td>
+            <td>${escapeHTML(p.name || '')}</td>
+            <td style="color:var(--muted)">${escapeHTML(p.company || '–')}</td>
+            <td style="color:var(--muted)">${escapeHTML(p.tnmc_no || '–')}</td>
+            <td style="color:var(--muted)">${escapeHTML(p.email || '–')}</td>
+            <td style="color:var(--muted)">${escapeHTML(p.phone || '–')}</td>
+            <td style="font-family:monospace;font-size:12px">${escapeHTML(p.badge_id || '')}</td>
             <td>${typePill(p.type)}</td>
-            <td>
-              <button type="button" class="btn btn-ghost btn-sm" onclick='openEditModal(${jsonStr})' style="margin-right:2px;">✏</button>
-              <button type="button" class="btn btn-ghost btn-sm" onclick="deleteParticipant(event, ${p.id}, '${safeName}')">🗑</button>
-            </td>
+            <td>${action}</td>
           </tr>`;
       }).join('');
     }
@@ -677,6 +704,13 @@ async function loadParticipants() {
   } catch (e) {
     console.error('loadParticipants error:', e);
   }
+}
+
+function toggleArchivedParticipants() {
+  archivedParticipants = !archivedParticipants;
+  pOffset = 0;
+  document.getElementById('archiveToggle').textContent = archivedParticipants ? 'Show active' : 'Show archived';
+  loadParticipants();
 }
 
 function prevPage() {
@@ -741,62 +775,56 @@ async function saveEdit(e) {
 }
 
 function typePill(t) {
-  const label = t || 'delegate';
+  const label = escapeHTML(t || 'delegate');
   const cls = String(label).replace(/\s+/g, '');
   return `<span class="pill pill-${cls}">${label}</span>`;
 }
 
-async function deleteParticipant(event, id, name) {
+function escapeHTML(value) {
+  return String(value).replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[char]);
+}
+
+async function archiveParticipant(event, id, name) {
   if (event) event.preventDefault();
   openModal(
-    'Delete Participant',
-    `Are you sure you want to delete ${name}? This will also remove their scan history.`,
-    'Delete',
+    'Archive Participant',
+    `Archive ${name}? Their badge will stop scanning, and their scan history will be retained. You can restore them later.`,
+    'Archive',
     'btn-danger',
     async () => {
       try {
         const r = await fetch(`/api/participants/${id}`, { method: 'DELETE' });
         const d = await r.json();
         if (d.success) {
-          toast(`Deleted ${name}`, 'info');
+          toast(`Archived ${name}`, 'info');
           loadParticipants();
           loadStats();
         } else {
-          toast('Error: ' + (d.error || 'Delete failed'), 'error');
+          toast('Error: ' + (d.error || 'Archive failed'), 'error');
         }
       } catch (e) {
-        console.error('deleteParticipant error:', e);
-        toast('Delete failed', 'error');
+        console.error('archiveParticipant error:', e);
+        toast('Archive failed', 'error');
       }
     }
   );
 }
 
-async function wipeAll(event) {
+async function restoreParticipant(event, id, name) {
   if (event) event.preventDefault();
-  openModal(
-    'Wipe All Data',
-    'DANGER: This will permanently delete ALL participants and ALL scan records. This cannot be undone.',
-    'Wipe Everything',
-    'btn-danger',
-    async () => {
-      try {
-        const r = await fetch('/api/participants', { method: 'DELETE' });
-        const d = await r.json();
-        if (d.success) {
-          toast('All data wiped', 'info');
-          pOffset = 0;
-          loadParticipants();
-          loadStats();
-        } else {
-          toast('Error: ' + (d.error || 'Wipe failed'), 'error');
-        }
-      } catch (e) {
-        console.error('wipeAll error:', e);
-        toast('Wipe failed', 'error');
-      }
-    }
-  );
+  try {
+    const response = await fetch(`/api/participants/${id}/restore`, { method: 'POST' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Restore failed');
+    toast(`Restored ${name}`, 'success');
+    loadParticipants();
+    loadStats();
+  } catch (error) {
+    console.error('restoreParticipant error:', error);
+    toast(error.message || 'Restore failed', 'error');
+  }
 }
 
 // ── Badges ──────────────────────────────────────────────
@@ -962,16 +990,20 @@ async function doScan() {
     <div style="font-size:36px;text-align:center;margin-bottom:8px">${icons[r.result]}</div>
     <div style="font-size:22px;font-weight:700;text-align:center;color:${colors[r.result]};margin-bottom:4px">${r.result.toUpperCase()}</div>
     ${r.participant ? `
-      <div style="text-align:center;font-size:18px;font-weight:600;margin:10px 0 4px">${r.participant.name}</div>
+      <div style="text-align:center;font-size:18px;font-weight:600;margin:10px 0 4px">${escapeHTML(r.participant.name || '')}</div>
       <div style="text-align:center">${typePill(r.participant.type)}</div>
-      <div style="text-align:center;color:var(--muted);font-size:12px;margin-top:6px">${r.participant.badge_id}</div>` : ''}
-    <div style="text-align:center;color:var(--muted);margin-top:10px;font-size:13px">${r.message}</div>`;
+      <div style="text-align:center;color:var(--muted);font-size:12px;margin-top:6px">${escapeHTML(r.participant.badge_id || '')}</div>` : ''}
+    <div style="text-align:center;color:var(--muted);margin-top:10px;font-size:13px">${escapeHTML(r.message || '')}</div>`;
 }
 
 // ── Logs ────────────────────────────────────────────────
 async function loadLogs() {
   const st = document.getElementById('logStation').value;
-  const rows = await fetch(`/api/scan/log?limit=500&station_type=${st}`).then(r=>r.json());
+  const rows = await fetch(`/api/scan/log?limit=500&station_type=${encodeURIComponent(st)}`).then(r=>r.json());
+  if (!Array.isArray(rows)) {
+    toast(rows.error || 'Could not load scan logs.', 'error');
+    return;
+  }
   if (!rows.length) {
     document.getElementById('logTable').innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px">No scan records found.</td></tr>';
     return;
@@ -981,19 +1013,19 @@ async function loadLogs() {
     const stationLabel = { checkin: 'Check-in', checkout: 'Check-out', lunch: 'Lunch', kit: 'Kit' }[l.station_type] || l.station_type;
     return `
     <tr>
-      <td style="color:var(--muted);font-size:12px;white-space:nowrap">${new Date(l.scanned_at).toLocaleString()}</td>
-      <td>${stationLabel}</td>
-      <td style="color:var(--muted)">${l.operator_id || '–'}</td>
+      <td style="color:var(--muted);font-size:12px;white-space:nowrap">${formatEventDateTime(l.scanned_at)}</td>
+      <td>${escapeHTML(stationLabel || '')}</td>
+      <td style="color:var(--muted)">${escapeHTML(l.operator_id || '–')}</td>
       <td>${l.participant_id || '–'}</td>
-      <td style="font-family:monospace;font-size:12px">${l.badge_id || '–'}</td>
-      <td>${l.name || '–'}</td>
-      <td style="color:var(--muted)">${l.company || '–'}</td>
-      <td style="color:var(--muted)">${l.tnmc_no || '–'}</td>
-      <td style="color:var(--muted)">${l.email || '–'}</td>
-      <td style="color:var(--muted)">${l.phone || '–'}</td>
+      <td style="font-family:monospace;font-size:12px">${escapeHTML(l.badge_id || '–')}</td>
+      <td>${escapeHTML(l.name || '–')}</td>
+      <td style="color:var(--muted)">${escapeHTML(l.company || '–')}</td>
+      <td style="color:var(--muted)">${escapeHTML(l.tnmc_no || '–')}</td>
+      <td style="color:var(--muted)">${escapeHTML(l.email || '–')}</td>
+      <td style="color:var(--muted)">${escapeHTML(l.phone || '–')}</td>
       <td>${l.type ? typePill(l.type) : '<span style="color:var(--muted)">–</span>'}</td>
-      <td><span class="result-${resultLower}">${l.result || '–'}</span></td>
-      <td style="color:var(--muted);font-size:12px">${l.message || ''}</td>
+      <td><span class="result-${escapeHTML(resultLower)}">${escapeHTML(l.result || '–')}</span></td>
+      <td style="color:var(--muted);font-size:12px">${escapeHTML(l.message || '')}</td>
     </tr>`;}).join('');
 }
 
@@ -1009,6 +1041,8 @@ async function loadSettings() {
   const s = await fetch('/api/settings').then(r=>r.json());
   document.getElementById('sEventName').value = s.event_name || '';
   document.getElementById('sEventDate').value = s.event_date || '';
+  eventTimeZone = s.event_timezone || 'Asia/Kolkata';
+  document.getElementById('sEventTimezone').value = eventTimeZone;
 
   for (const type of ['delegate','faculty','sponsor','event team']) {
     const fieldId = type === 'event team' ? 'event-team' : type;
@@ -1026,14 +1060,21 @@ async function loadSettings() {
   }
 }
 async function saveSettings() {
-  await fetch('/api/settings', {
+  const response = await fetch('/api/settings', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({
       event_name: document.getElementById('sEventName').value,
-      event_date: document.getElementById('sEventDate').value
+      event_date: document.getElementById('sEventDate').value,
+      event_timezone: document.getElementById('sEventTimezone').value
     })
   });
+  const result = await response.json();
+  if (!response.ok) {
+    toast(result.error || 'Could not save settings.', 'error');
+    return;
+  }
+  eventTimeZone = document.getElementById('sEventTimezone').value;
   toast('Settings saved', 'success');
 }
 
@@ -1046,6 +1087,7 @@ function exportCSV(type) {
 
 // ── Init ────────────────────────────────────────────────
 loadStats();
+loadSettings();
 </script>
 </body>
 </html>

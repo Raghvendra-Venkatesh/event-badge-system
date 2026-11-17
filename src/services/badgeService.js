@@ -3,9 +3,9 @@ const puppeteer = require('puppeteer');
 const { PDFDocument } = require('pdf-lib');
 const fs   = require('fs');
 const path = require('path');
+const { EXPORTS_DIR } = require('../storagePaths');
 
 const TEMPLATE_PATH  = path.join(__dirname, '../templates/badge.html');
-const EXPORTS_DIR    = path.join(__dirname, '../../exports');
 const INDIVIDUAL_DIR = path.join(EXPORTS_DIR, 'individual');
 const BULK_DIR       = path.join(EXPORTS_DIR, 'bulk');
 
@@ -34,6 +34,12 @@ function getTypeColor(type) {
   return TYPE_COLORS[(type || '').toLowerCase()] || DEFAULT_COLOR;
 }
 
+function escapeHTML(value) {
+  return String(value || '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[char]);
+}
+
 function buildBadgeHTML(template, participant, settings) {
   const tc = getTypeColor(participant.type);
 
@@ -45,12 +51,12 @@ function buildBadgeHTML(template, participant, settings) {
     const mime = ext === 'svg' ? 'image/svg+xml' : `image/${ext === 'jpg' ? 'jpeg' : ext}`;
     logoHtml = `<img src="data:${mime};base64,${logoData.toString('base64')}" alt="logo">`;
   } else {
-    logoHtml = `<div class="logo-placeholder">${settings.event_name || 'Event Name'}</div>`;
+    logoHtml = `<div class="logo-placeholder">${escapeHTML(settings.event_name || 'Event Name')}</div>`;
   }
 
   // Company line (only if present)
   const companyHtml = participant.company
-    ? `<div class="company">${participant.company}</div>`
+    ? `<div class="company">${escapeHTML(participant.company)}</div>`
     : '';
 
   // Background Data URL logic: per-type override => global background => built-in default type design
@@ -74,26 +80,20 @@ function buildBadgeHTML(template, participant, settings) {
     '{{TYPE_COLOR_LIGHT}}':  tc.light,
     '{{TYPE_COLOR_DARK}}':   tc.dark,
     '{{LOGO_HTML}}':         logoHtml,
-    '{{EVENT_NAME}}':        settings.event_name || 'Event Name',
-    '{{EVENT_DATE}}':        settings.event_date || '',
-    '{{PARTICIPANT_TYPE}}':  pType.toUpperCase(),
-    '{{TYPE}}':              pType.toUpperCase(),
-    '{{PARTICIPANT_NAME}}':  participant.name || '',
+    '{{EVENT_NAME}}':        escapeHTML(settings.event_name || 'Event Name'),
+    '{{EVENT_DATE}}':        escapeHTML(settings.event_date || ''),
+    '{{PARTICIPANT_TYPE}}':  escapeHTML(pType.toUpperCase()),
+    '{{TYPE}}':              escapeHTML(pType.toUpperCase()),
+    '{{PARTICIPANT_NAME}}':  escapeHTML(participant.name || ''),
     '{{COMPANY_HTML}}':      companyHtml,
-    '{{PHONE}}':             participant.phone || '',
-    '{{QR_DATA_URL}}':       participant.qr_base64 || '',
-    '{{BADGE_ID}}':          participant.badge_id || '',
+    '{{PHONE}}':             escapeHTML(participant.phone || ''),
+    '{{QR_DATA_URL}}':       escapeHTML(participant.qr_base64 || ''),
+    '{{BADGE_ID}}':          escapeHTML(participant.badge_id || ''),
     '{{BG_HTML}}':           bgHtml,
     '{{BODY_CLASS}}':        bodyClass
   };
 
-  let html = template;
-  for (const [key, val] of Object.entries(replacements)) {
-    const regex = new RegExp(key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-    html = html.replace(regex, val);
-  }
-
-  return html;
+  return template.replace(/\{\{[A-Z_]+\}\}/g, token => replacements[token] ?? token);
 }
 
 async function renderBadgeToPDF(browser, html) {
@@ -176,4 +176,4 @@ async function generateBadges(participants, settings, onProgress) {
   };
 }
 
-module.exports = { generateBadges, getTypeColor, TYPE_COLORS };
+module.exports = { generateBadges, getTypeColor, TYPE_COLORS, buildBadgeHTML };

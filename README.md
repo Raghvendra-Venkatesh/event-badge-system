@@ -1,63 +1,75 @@
 # Event Badge & Scan System
 
-A self-hosted, full-stack event management system designed to easily handle participant data import, badge generation with QR codes, and real-time attendance tracking with scanners. 
+A web application for importing event participants, generating QR-code badges, scanning attendance, and reviewing/exporting scan logs.
 
-## Features
+## Data safety and dates
 
-- **XLSX/CSV Import Integration:** Seamlessly import participant lists with validation.
-- **Dynamic Badge Generation:** Automatically generate customizable, print-ready PDF badges with QR codes using `puppeteer` and `pdf-lib`.
-- **QR Code Scanning & Analytics:** Scan participant badges to log attendance dynamically.
-- **Real-time Syncing:** Employs WebSockets (`ws`) to show instant scan updates across connected clients.
-- **Data Export:** Export detailed scan logs and participant reports as formatted files (`archiver` & `xlsx`).
-- **Lightweight Backend:** Built entirely on Node.js / Express with `node-sqlite3-wasm` for a robust, cross-platform SQLite database that does not require native build tools.
+- Participant and scan data is stored in PostgreSQL, not browser storage. Refreshing a page or redeploying the app does not clear it.
+- Scan times are stored as timezone-aware timestamps. The event's IANA time zone (default `Asia/Kolkata`) controls the “today” scan rules and the time shown in the admin and scanner pages.
+- The trash button archives a participant. It stops them from scanning but keeps their participant record and scan history; archived participants can be restored from the Participants page. There is no bulk-wipe action or automatic data cleanup.
+- Uploaded badge artwork and generated PDFs are stored under `DATA_DIR` and `EXPORTS_DIR`. On Render, mount a persistent disk at `/var/data`.
 
-## Tech Stack
+## Deploy on Render
 
-- **Backend:** Node.js, Express.js
-- **Database:** SQLite (`node-sqlite3-wasm`)
-- **PDF/Printing:** Puppeteer, pdf-lib
-- **WebSockets:** `ws` (for live scan updates)
-- **Utilities:** `qrcode`, `xlsx`, `express-fileupload`, `archiver`
+The included `render.yaml` provisions a Render web service, PostgreSQL database, and persistent disk. The app requires a paid web service and database plan to keep the disk and database durable.
 
-## Installation
+1. Push the `main1` branch to GitHub and create a Render Blueprint from the repository using `render.yaml`.
+2. Set `OPERATOR_PASSWORD` in Render to a strong password of at least 12 characters. Render generates `SESSION_SECRET`; keep it private. The application requires operator sign-in before serving pages, APIs, scan logs, or WebSocket updates.
+3. Wait for the service health check to pass, then open its Render URL and sign in. Browser camera scanning uses Render's HTTPS endpoint.
+4. In Settings, set the event date and its IANA time zone (for example `Asia/Kolkata` or `America/New_York`). Configure PostgreSQL backups and periodically test a restore. Back up files on the persistent disk separately; database backups do not include badge images or generated PDFs.
 
-### 1. Prerequisites
-- **Node.js** (v18 or higher recommended)
-- **NPM**
+Render terminates HTTPS and forwards requests to the app over its private service connection. The app listens on Render's `PORT`; do not add a separate HTTP redirect service.
 
-### 2. Setup
+## Local development
 
-Clone the repository and install dependencies:
+Requirements: Node.js 22.12+ and a PostgreSQL database.
 
-```bash
-git clone https://github.com/Raghvendra-Venkatesh/event-badge-system.git
-cd event-badge-system
+Local HTTPS is optional. If needed, provide your own `TLS_KEY_PATH` and `TLS_CERT_PATH`; keep the private key outside the repository. Render terminates HTTPS in production.
+
+```powershell
 npm install
+Copy-Item .env.example .env
 ```
 
-### 3. Database Initialization
+Set `DATABASE_URL` to your PostgreSQL connection string and fill `OPERATOR_PASSWORD` and `SESSION_SECRET` in `.env`. Use a unique operator password and a random secret of at least 32 characters. To generate a suitable secret:
 
-To set up your SQLite database tables, run the setup script:
+```powershell
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+```
 
-```bash
+Then initialize and run the app:
+
+```powershell
 npm run setup
-```
-
-## Running the Application
-
-To start the server, simply run:
-
-```bash
 npm start
 ```
 
-The application will be accessible by default on **localhost:3000** (or whatever port is defined in your environment file).
+Run focused tests with `npm test`.
 
-## Project Structure
+## Migrating an existing SQLite installation
 
-- `src/server.js`: Main Express application entry point.
-- `src/setup-db.js`: Database initialization scripts.
-- `src/routes/`: Express route handlers for API logic (e.g., imports, badges, scanning).
-- `data/`: Contains the SQLite database file (ignored in source control).
-- `public/`: Frontend static assets (HTML, CSS, JS).
-- `exports/` & `media/`: Processed outputs and graphical resources.
+The migration command copies participants, scan history, event settings, timestamps, and badge artwork from the old SQLite database. It refuses to overwrite a PostgreSQL database that already contains participants or scans. First configure `DATABASE_URL` for the empty target database and `DATA_DIR` for a location where the source artwork can be copied, then run:
+
+```powershell
+npm run migrate:sqlite -- "C:\path\to\data\event.db"
+```
+
+The migration interprets legacy SQLite timestamps as UTC and computes each historical scan day in the configured event time zone. If the target is Render, run the migration from a trusted machine using the Render PostgreSQL external connection string and set `PGSSLMODE=require` (temporarily allowlist that machine if required). After deploying, upload the logo/background artwork again in the app so copies are present on Render's persistent disk.
+
+## Features
+
+- CSV/XLSX participant imports with QR code generation
+- Individual and bulk print-ready badge PDFs
+- QR scanning with check-in, checkout, lunch, and kit rules
+- Live scan updates over authenticated WebSockets
+- Participant and scan-log exports as CSV
+
+## Project layout
+
+- `src/server.js`: Express server, operator authentication, and WebSockets.
+- `src/db.js`: PostgreSQL connection pool and transaction helper.
+- `src/setup-db.js`: Idempotent PostgreSQL schema initialization.
+- `src/migrate-sqlite-to-postgres.js`: One-time migration from the earlier SQLite database.
+- `src/routes/`: Import, participant, scan, badge, settings, and export APIs.
+- `public/`: Admin dashboard, login, and scanner pages.
+- `render.yaml` / `Dockerfile`: Render deployment configuration.

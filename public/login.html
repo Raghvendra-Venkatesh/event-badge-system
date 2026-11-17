@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · Event Badge System</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0f1117; color: #e8eaf0; }
+    body { min-height: 100vh; display: grid; place-items: center; margin: 0; }
+    main { width: min(360px, calc(100% - 32px)); padding: 28px; background: #181c27; border: 1px solid #2a2f42; border-radius: 12px; }
+    h1 { margin: 0 0 8px; font-size: 21px; }
+    p { color: #8890a8; font-size: 14px; }
+    label { display: block; margin: 22px 0 6px; color: #8890a8; font-size: 13px; }
+    input, button { width: 100%; box-sizing: border-box; padding: 11px; border-radius: 7px; font: inherit; }
+    input { border: 1px solid #2a2f42; background: #1e2333; color: inherit; }
+    button { margin-top: 14px; border: 0; background: #4f7ef8; color: white; font-weight: 600; cursor: pointer; }
+    #error { min-height: 20px; color: #f87171; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Event Badge System</h1>
+    <p>Sign in with the event operator password.</p>
+    <form id="loginForm">
+      <label for="password">Operator password</label>
+      <input id="password" type="password" autocomplete="current-password" required autofocus>
+      <button type="submit">Sign in</button>
+      <p id="error" role="alert"></p>
+    </form>
+  </main>
+  <script>
+    const form = document.getElementById('loginForm');
+    const error = document.getElementById('error');
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      error.textContent = '';
+      try {
+        const response = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: document.getElementById('password').value })
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          error.textContent = result.error || 'Sign in failed.';
+          return;
+        }
+        const requested = new URLSearchParams(location.search).get('next') || '/';
+        const next = requested.startsWith('/') && !requested.startsWith('//') ? requested : '/';
+        location.replace(next);
+      } catch {
+        error.textContent = 'Could not reach the server. Try again.';
+      }
+    });
+  </script>
+</body>
+</html>

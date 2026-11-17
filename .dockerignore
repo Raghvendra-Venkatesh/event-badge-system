@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+node_modules
+data
+exports
+certs
+*.db
+*.sqlite
+npm-debug.log
